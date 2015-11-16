@@ -66,6 +66,21 @@ func CheckError(err error) {
 	}
 }
 
+func HandleRouterUpdateMsg(r *router, msg string) error {
+	fmt.Println("Update Router\n")
+	return nil
+}
+
+func HandleLinkUpdateMsg(r *router, msg string) error {
+	fmt.Println("Update Link\n")
+	return nil
+}
+
+func HandlePrintMsg(r *router, msg string) error {
+	fmt.Println("Print Msg\n")
+	return nil
+}
+
 func ListenForMsg(r *router) error {
 	ServerAddr, err :=
 		net.ResolveUDPAddr("udp", ":"+fmt.Sprint(r.port))
@@ -80,11 +95,22 @@ func ListenForMsg(r *router) error {
 
 	for {
 		n, addr, err := ServerConn.ReadFromUDP(buf)
-		fmt.Println("Recieved", string(buf[0:n]), " from ", addr)
-
+		fmt.Println("Recieved", string(buf[0]), string(buf[0:n]), " from ", addr)
 		if err != nil {
 			fmt.Println("ERROR:", err)
 		}
+
+		switch buf[0] {
+		case 'U': //Router Update Message
+			HandleRouterUpdateMsg(r, string(buf[:n]))
+		case 'L': //Link Update Message
+			HandleLinkUpdateMsg(r, string(buf[:n]))
+		case 'P': //Print Message
+			HandlePrintMsg(r, string(buf[:n]))
+		default:
+			panic("Unrecognized Message")
+		}
+
 	}
 }
 
