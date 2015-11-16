@@ -54,7 +54,6 @@ func main() {
 	}
 
 	ReadConfigFiles(r)
-	DisplayConfig(r)
 
 	ListenForMsg(r)
 
@@ -68,33 +67,62 @@ func CheckError(err error) {
 	}
 }
 
-func HandleRouterUpdateMsg(r *router, msg string) error {
-	// U d1 cost1 d2 cost2 ... dn costn
-	// 0 1  2     3  4
-	fmt.Println("Update Router\n")
+func HandleRouterUpdateMsg(r *router, msg string, addr string) error {
+	var sendUpdate bool
 	words := strings.Fields(msg)
+	fmt.Println("ADDR:", addr)
 	for i := 0; i < len(words); {
-		c, err := strconv.Atoi(words[i+1])
+		cost, err := strconv.Atoi(words[i+1])
+		node := words[i]
 		CheckError(err)
-		if words[i] == r.name {
-			r.distv[words[i]] = 0
+
+		if node == r.name {
 			i += 2
 			continue
 		}
-		r.distv[words[i]] = c
+
+		r.distv[node] = cost
 		i += 2
+	}
+	if sendUpdate {
+		SendRouterUpdateMsg(r)
 	}
 	DisplayConfig(r)
 	return nil
 }
 
-func HandleLinkUpdateMsg(r *router, msg string) error {
+func SendRouterUpdateMsg(r *router) error {
+
+}
+
+func HandleLinkUpdateMsg(r *router, msg string, addr string) error {
 	fmt.Println("Update Link\n")
+	words := strings.Fields(msg)
+	c, err := strconv.Atoi(words[1])
+	CheckError(err)
+	r.distv[words[0]] = c
+	DisplayConfig(r)
 	return nil
 }
 
 func HandlePrintMsg(r *router, msg string) error {
-	fmt.Println("Print Msg\n")
+	words := strings.Fields(msg)
+	if len(words) > 0 {
+		if r.distv[words[0]] != 0 || words[0] == r.name {
+			fmt.Printf("Router: %s\nRouting Entry:\n", r.name)
+			fmt.Printf("\tDest: %s Cost: %d\n",
+				words[0], r.distv[words[0]])
+		} else {
+			fmt.Printf("Router: %s has no entry: %s\n",
+				r.name, words[0])
+		}
+	} else {
+		fmt.Printf("Router: %s\nRouting Table:\n", r.name)
+		for key, val := range r.distv {
+			fmt.Printf("\tDest: %s Cost: %d\n", key, val)
+		}
+	}
+	fmt.Printf("------------------\n")
 	return nil
 }
 
@@ -112,16 +140,17 @@ func ListenForMsg(r *router) error {
 
 	for {
 		n, addr, err := ServerConn.ReadFromUDP(buf)
-		fmt.Println("Recieved", string(buf[0]), string(buf[1:n]), " from ", addr)
 		if err != nil {
 			fmt.Println("ERROR:", err)
 		}
 
+		fmt.Print(addr.IP.String())
+
 		switch buf[0] {
 		case 'U': //Router Update Message
-			HandleRouterUpdateMsg(r, string(buf[1:n]))
+			HandleRouterUpdateMsg(r, string(buf[1:n]), addr.String())
 		case 'L': //Link Update Message
-			HandleLinkUpdateMsg(r, string(buf[1:n]))
+			HandleLinkUpdateMsg(r, string(buf[1:n]), addr.String())
 		case 'P': //Print Message
 			HandlePrintMsg(r, string(buf[1:n]))
 		default:
@@ -146,31 +175,17 @@ func DisplayConfig(r *router) error {
 }
 
 func ReadConfigFiles(r *router) error {
-	cfgpath := path.Join(r.testdir, r.name+".cfg")
-	fi, err := os.Open(cfgpath)
+	var name, addr string
+	var cost, local, remote, port int
+
+	rtrpath := path.Join(r.testdir, "routers")
+	fi, err := os.Open(rtrpath)
 	if err != nil {
 		return err
 	}
 	defer fi.Close()
 
-	var name, addr string
-	var cost, local, remote, port int
-
 	scan := bufio.NewScanner(fi)
-	for scan.Scan() {
-		fmt.Sscanf(scan.Text(),
-			"%s %d %d %d", &name, &cost, &local, &remote)
-
-		r.distv[name] = cost
-	}
-
-	rtrpath := path.Join(r.testdir, "routers")
-	fi, err = os.Open(rtrpath)
-	if err != nil {
-		return err
-	}
-
-	scan = bufio.NewScanner(fi)
 	for scan.Scan() {
 		fmt.Sscanf(scan.Text(), "%s %s %d", &name, &addr, &port)
 
@@ -179,8 +194,24 @@ func ReadConfigFiles(r *router) error {
 			port: port,
 		}
 		r.table[name] = ri
+		r.distv[name] = 64
 	}
 	r.port = r.table[r.name].port
+
+	cfgpath := path.Join(r.testdir, r.name+".cfg")
+	fi, err = os.Open(cfgpath)
+	if err != nil {
+		return err
+	}
+
+	scan = bufio.NewScanner(fi)
+	for scan.Scan() {
+		fmt.Sscanf(scan.Text(),
+			"%s %d %d %d", &name, &cost, &local, &remote)
+
+		r.distv[name] = cost
+	}
+	r.distv[r.name] = 0
 
 	return nil
 }
