@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const INF = 64
@@ -18,20 +20,17 @@ type routerInfo struct {
 	port int
 }
 
-type linkInfo struct {
-	cost   int
-	local  int
-	remote int
-}
-
 type router struct {
 	name     string
 	testdir  string
 	poisoned bool
 	table    map[string]*routerInfo
 	distv    map[string]int
+	neigh    map[string]*routerInfo
+	pton     map[int]string
 	addr     string
 	port     int
+	serv     *net.UDPConn
 }
 
 func main() {
@@ -49,15 +48,26 @@ func main() {
 		poisoned: *dashp,
 		table:    make(map[string]*routerInfo),
 		distv:    make(map[string]int),
+		neigh:    make(map[string]*routerInfo),
+		pton:     make(map[int]string),
 		addr:     "localhost",
 		port:     0,
+		serv:     nil,
 	}
 
 	ReadConfigFiles(r)
 
+	go UpdateTimer(r)
 	ListenForMsg(r)
 
 	//DistanceVector()
+}
+
+func UpdateTimer(r *router) error {
+	for range time.Tick(time.Second * 30) {
+		SendRouterUpdateMsg(r)
+	}
+	return nil
 }
 
 func CheckError(err error) {
@@ -67,10 +77,9 @@ func CheckError(err error) {
 	}
 }
 
-func HandleRouterUpdateMsg(r *router, msg string, addr string) error {
+func HandleRouterUpdateMsg(r *router, msg string, sender string) error {
 	var sendUpdate bool
 	words := strings.Fields(msg)
-	fmt.Println("ADDR:", addr)
 	for i := 0; i < len(words); {
 		cost, err := strconv.Atoi(words[i+1])
 		node := words[i]
@@ -81,7 +90,10 @@ func HandleRouterUpdateMsg(r *router, msg string, addr string) error {
 			continue
 		}
 
-		r.distv[node] = cost
+		if r.distv[node] > (r.distv[sender] + cost) {
+			r.distv[node] = cost + r.distv[sender]
+			sendUpdate = true
+		}
 		i += 2
 	}
 	if sendUpdate {
@@ -92,15 +104,28 @@ func HandleRouterUpdateMsg(r *router, msg string, addr string) error {
 }
 
 func SendRouterUpdateMsg(r *router) error {
+	var buffer bytes.Buffer
+	buffer.WriteString("U")
 
+	for key, val := range r.distv {
+		fmt.Fprintf(&buffer, " %s %d", key, val)
+	}
+	for _, val := range r.neigh {
+		ServerAddr, err :=
+			net.ResolveUDPAddr("udp", ":"+fmt.Sprint(val.port))
+		CheckError(err)
+
+		r.serv.WriteToUDP(buffer.Bytes(), ServerAddr)
+	}
+	return nil
 }
 
-func HandleLinkUpdateMsg(r *router, msg string, addr string) error {
-	fmt.Println("Update Link\n")
+func HandleLinkUpdateMsg(r *router, msg string, sender string) error {
 	words := strings.Fields(msg)
 	c, err := strconv.Atoi(words[1])
 	CheckError(err)
 	r.distv[words[0]] = c
+	SendRouterUpdateMsg(r)
 	DisplayConfig(r)
 	return nil
 }
@@ -129,34 +154,32 @@ func HandlePrintMsg(r *router, msg string) error {
 func ListenForMsg(r *router) error {
 	ServerAddr, err :=
 		net.ResolveUDPAddr("udp", ":"+fmt.Sprint(r.port))
-
 	CheckError(err)
 
 	ServerConn, err := net.ListenUDP("udp", ServerAddr)
 	CheckError(err)
+	r.serv = ServerConn
+
 	defer ServerConn.Close()
 
 	buf := make([]byte, 1024)
-
 	for {
+
 		n, addr, err := ServerConn.ReadFromUDP(buf)
 		if err != nil {
 			fmt.Println("ERROR:", err)
 		}
 
-		fmt.Print(addr.IP.String())
-
 		switch buf[0] {
 		case 'U': //Router Update Message
-			HandleRouterUpdateMsg(r, string(buf[1:n]), addr.String())
+			HandleRouterUpdateMsg(r, string(buf[1:n]), r.pton[addr.Port])
 		case 'L': //Link Update Message
-			HandleLinkUpdateMsg(r, string(buf[1:n]), addr.String())
+			HandleLinkUpdateMsg(r, string(buf[1:n]), r.pton[addr.Port])
 		case 'P': //Print Message
 			HandlePrintMsg(r, string(buf[1:n]))
 		default:
 			panic("Unrecognized Message")
 		}
-
 	}
 }
 
@@ -210,6 +233,8 @@ func ReadConfigFiles(r *router) error {
 			"%s %d %d %d", &name, &cost, &local, &remote)
 
 		r.distv[name] = cost
+		r.neigh[name] = r.table[name]
+		r.pton[r.table[name].port] = name
 	}
 	r.distv[r.name] = 0
 
