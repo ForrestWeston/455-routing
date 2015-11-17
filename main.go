@@ -79,10 +79,11 @@ func CheckError(err error) {
 
 func HandleRouterUpdateMsg(r *router, msg string, sender string) error {
 	var sendUpdate bool
+	var node string
 	words := strings.Fields(msg)
 	for i := 0; i < len(words); {
 		cost, err := strconv.Atoi(words[i+1])
-		node := words[i]
+		node = words[i]
 		CheckError(err)
 
 		if node == r.name {
@@ -98,8 +99,9 @@ func HandleRouterUpdateMsg(r *router, msg string, sender string) error {
 	}
 	if sendUpdate {
 		SendRouterUpdateMsg(r)
+		fmt.Printf("%s - dest: %s cost: %d nexthop %s\n", r.name, node, r.distv[node], sender)
 	}
-	DisplayConfig(r)
+	//DisplayConfig(r)
 	return nil
 }
 
